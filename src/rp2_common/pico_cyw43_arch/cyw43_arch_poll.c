@@ -4,73 +4,70 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+// This header is included by cyw43_driver to setup its environment
+
+#ifndef _CYW43_CONFIGPORT_H
+#define _CYW43_CONFIGPORT_H
+
+#include "pico.h"
+
+#ifdef PICO_CYW43_ARCH_HEADER
+#include __XSTRING(PICO_CYW43_ARCH_HEADER)
+#else
 #if PICO_CYW43_ARCH_POLL
-
-#include "pico/cyw43_arch.h"
-#include "pico/cyw43_driver.h"
-
-#include "pico/async_context_poll.h"
-#if CYW43_LWIP
-#include "pico/lwip_nosys.h"
+#include "pico/cyw43_arch/arch_poll.h"
+#elif PICO_CYW43_ARCH_THREADSAFE_BACKGROUND
+#include "pico/cyw43_arch/arch_threadsafe_background.h"
+#elif PICO_CYW43_ARCH_FREERTOS
+#include "pico/cyw43_arch/arch_freertos.h"
+#else
+#error must specify support pico_cyw43_arch architecture type or set PICO_CYW43_ARCH_HEADER
+#endif
 #endif
 
-#if CYW43_ENABLE_BLUETOOTH
-#include "pico/btstack_cyw43.h"
+#ifndef CYW43_HOST_NAME
+#define CYW43_HOST_NAME "PicoW"
 #endif
 
-#if CYW43_LWIP && !NO_SYS
-#error PICO_CYW43_ARCH_POLL requires lwIP NO_SYS=1
+#ifndef CYW43_GPIO
+#define CYW43_GPIO 1
 #endif
 
-static async_context_poll_t cyw43_async_context_poll;
+#ifndef CYW43_LOGIC_DEBUG
+#define CYW43_LOGIC_DEBUG 0
+#endif
 
-async_context_t *cyw43_arch_init_default_async_context(void) {
-    if (async_context_poll_init_with_defaults(&cyw43_async_context_poll))
-        return &cyw43_async_context_poll.core;
-    return NULL;
-}
+#ifndef CYW43_USE_OTP_MAC
+#define CYW43_USE_OTP_MAC 0
+#endif
 
-int cyw43_arch_init(void) {
-    async_context_t *context = cyw43_arch_async_context();
-    if (!context) {
-        context = cyw43_arch_init_default_async_context();
-        if (!context) return PICO_ERROR_GENERIC;
-        cyw43_arch_set_async_context(context);
-    }
-    bool ok = cyw43_driver_init(context);
-#if CYW43_LWIP
-    ok &= lwip_nosys_init(context);
+#ifndef CYW43_NO_NETUTILS
+#define CYW43_NO_NETUTILS 1
 #endif
-#if CYW43_ENABLE_BLUETOOTH
-    ok &= btstack_cyw43_init(context);
-#endif
-    if (!ok) {
-        cyw43_arch_deinit();
-        return PICO_ERROR_GENERIC;
-    } else {
-        return 0;
-    }
-}
 
-void cyw43_arch_deinit(void) {
-    async_context_t *context = cyw43_arch_async_context();
-#if CYW43_ENABLE_BLUETOOTH
-    btstack_cyw43_deinit(context);
+#ifndef CYW43_IOCTL_TIMEOUT_US
+#define CYW43_IOCTL_TIMEOUT_US 1000000
 #endif
-    // there is a bit of a circular dependency here between lwIP and cyw43_driver. We
-    // shut down cyw43_driver first as it has IRQs calling back into lwIP. Also lwIP itself
-    // does not actually get shut down.
-    // todo add a "pause" method to async_context if we need to provide some atomicity (we
-    //      don't want to take the lock as these methods may invoke execute_sync()
-    cyw43_driver_deinit(context);
-#if CYW43_LWIP
-    lwip_nosys_deinit(context);
+
+#ifndef CYW43_USE_STATS
+#define CYW43_USE_STATS 0
 #endif
-    // if it is our context, then we de-init it.
-    if (context == &cyw43_async_context_poll.core) {
-        async_context_deinit(context);
-        cyw43_arch_set_async_context(NULL);
-    }
-}
+
+// todo should this be user settable?
+#ifndef CYW43_HAL_MAC_WLAN0
+#define CYW43_HAL_MAC_WLAN0 0
+#endif
+
+#ifndef STATIC
+#define STATIC static
+#endif
+
+#ifndef CYW43_USE_SPI
+#define CYW43_USE_SPI 1
+#endif
+
+#ifndef CYW43_SPI_PIO
+#define CYW43_SPI_PIO 1
+#endif
 
 #endif
