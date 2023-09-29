@@ -436,10 +436,10 @@ uint32_t read_reg_u32_swap(cyw43_int_t *self, uint32_t fn, uint32_t reg) {
 
 static inline uint32_t _cyw43_read_reg(cyw43_int_t *self, uint32_t fn, uint32_t reg, uint size) {
     // Padding plus max read size of 32 bits + another 4?
-    static_assert(WHD_BUS_SPI_BACKPLANE_READ_PADD_SIZE % 4 == 0, "");
-    uint32_t buf32[WHD_BUS_SPI_BACKPLANE_READ_PADD_SIZE/4 + 1 + 1];
+    static_assert(CYW43_BACKPLANE_READ_PAD_LEN_BYTES % 4 == 0, "");
+    uint32_t buf32[CYW43_BACKPLANE_READ_PAD_LEN_BYTES/4 + 1 + 1];
     uint8_t *buf = (uint8_t *)buf32;
-    const uint32_t padding = (fn == BACKPLANE_FUNCTION) ? WHD_BUS_SPI_BACKPLANE_READ_PADD_SIZE : 0; // Add response delay
+    const uint32_t padding = (fn == BACKPLANE_FUNCTION) ? CYW43_BACKPLANE_READ_PAD_LEN_BYTES : 0; // Add response delay
     buf32[0] = make_cmd(false, true, fn, reg, size + padding);
 
     if (fn == BACKPLANE_FUNCTION) {
