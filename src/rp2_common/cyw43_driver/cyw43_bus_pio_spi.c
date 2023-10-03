@@ -1,8 +1,12 @@
 /*
  * Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+ * Copyright (c) 2023 Tech by Androda, LLC
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
+
+#pragma GCC push_options
+#pragma GCC optimize ("-O0")
 
 #include <stdlib.h>
 #include <string.h>
@@ -31,11 +35,10 @@
 #define CS_PIN 25u
 #define IRQ_SAMPLE_DELAY_NS 100
 
-#define SPI_PROGRAM_NAME spi_gap01_sample0
+#define SPI_PROGRAM_NAME cyw43_spi_w
 #define SPI_PROGRAM_FUNC __CONCAT(SPI_PROGRAM_NAME, _program)
 #define SPI_PROGRAM_GET_DEFAULT_CONFIG_FUNC __CONCAT(SPI_PROGRAM_NAME, _program_get_default_config)
 #define SPI_OFFSET_END __CONCAT(SPI_PROGRAM_NAME, _offset_end)
-#define SPI_OFFSET_LP1_END __CONCAT(SPI_PROGRAM_NAME, _offset_lp1_end)
 
 #define CLOCK_DIV 2
 #define CLOCK_DIV_MINOR 0
@@ -71,7 +74,7 @@ __force_inline static uint32_t __swap16x2(uint32_t a) {
 #define SWAP32(a) __swap16x2(a)
 
 #ifndef CYW43_SPI_PIO_PREFERRED_PIO
-#define CYW43_SPI_PIO_PREFERRED_PIO 1
+#define CYW43_SPI_PIO_PREFERRED_PIO 0
 #endif
 static_assert(CYW43_SPI_PIO_PREFERRED_PIO >=0 && CYW43_SPI_PIO_PREFERRED_PIO < NUM_PIOS, "");
 
@@ -96,10 +99,10 @@ int cyw43_spi_init(cyw43_int_t *self) {
     uint pio_index = CYW43_SPI_PIO_PREFERRED_PIO;
     // Check we can add the program
     if (!pio_can_add_program(pios[pio_index], &SPI_PROGRAM_FUNC)) {
-        pio_index ^= 1;
-        if (!pio_can_add_program(pios[pio_index], &SPI_PROGRAM_FUNC)) {
+        // pio_index ^= 1;  // not a preference, it's required to use specified PIO
+        // if (!pio_can_add_program(pios[pio_index], &SPI_PROGRAM_FUNC)) {
             return CYW43_FAIL_FAST_CHECK(-CYW43_EIO);
-        }
+        // }
     }
     assert(!self->bus_data);
     self->bus_data = &bus_data_instance;
@@ -242,38 +245,75 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
         assert(!(((uintptr_t)rx) & 3));
         assert(!(rx_length & 3));
 
+        // turn PIO SM off
         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, false);
+        // auto-jump to beginning of program after completion (use auto-wrap?)
         pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_END - 1);
         pio_sm_clear_fifos(bus_data->pio, bus_data->pio_sm);
         pio_sm_set_pindirs_with_mask(bus_data->pio, bus_data->pio_sm, 1u << DATA_OUT_PIN, 1u << DATA_OUT_PIN);
+        // "restart" is badly named, this clears SM state basically
         pio_sm_restart(bus_data->pio, bus_data->pio_sm);
         pio_sm_clkdiv_restart(bus_data->pio, bus_data->pio_sm);
+        // writes the number of bits to send into X register
         pio_sm_put(bus_data->pio, bus_data->pio_sm, tx_length * 8 - 1);
         pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_out(pio_x, 32));
+        // writes the number of bits to receive into Y register
         pio_sm_put(bus_data->pio, bus_data->pio_sm, (rx_length - tx_length) * 8 - 1);
         pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_out(pio_y, 32));
+        // jump to beginning of program
         pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_jmp(bus_data->pio_offset));
         dma_channel_abort(bus_data->dma_out);
         dma_channel_abort(bus_data->dma_in);
 
         dma_channel_config out_config = dma_channel_get_default_config(bus_data->dma_out);
         channel_config_set_bswap(&out_config, true);
-        channel_config_set_dreq(&out_config, pio_get_dreq(bus_data->pio, 0, true));
+        channel_config_set_dreq(&out_config, pio_get_dreq(bus_data->pio, bus_data->pio_sm, true));
 
-        dma_channel_configure(bus_data->dma_out, &out_config, &bus_data->pio->txf[0], tx, tx_length / 4, true);
+        dma_channel_configure(bus_data->dma_out, &out_config, &bus_data->pio->txf[bus_data->pio_sm], tx, tx_length / 4, true);
 
         dma_channel_config in_config = dma_channel_get_default_config(bus_data->dma_in);
         channel_config_set_bswap(&in_config, true);
-        channel_config_set_dreq(&in_config, pio_get_dreq(bus_data->pio, 0, false));
+        channel_config_set_dreq(&in_config, pio_get_dreq(bus_data->pio, bus_data->pio_sm, false));
         channel_config_set_write_increment(&in_config, true);
         channel_config_set_read_increment(&in_config, false);
-        dma_channel_configure(bus_data->dma_in, &in_config, rx + tx_length, &bus_data->pio->rxf[0], rx_length / 4 - tx_length / 4, true);
+        dma_channel_configure(bus_data->dma_in, &in_config, rx + tx_length, &bus_data->pio->rxf[bus_data->pio_sm], rx_length / 4 - tx_length / 4, true);
 
         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
         __compiler_memory_barrier();
 
+        // TODO Anything special required for the case where 0 bits are being read/written?
         dma_channel_wait_for_finish_blocking(bus_data->dma_out);
+
+        // Set PIO disabled so instructions can be rewritten
+        // Disabled only means it's not auto-running, has nothing to do with manual calls to execute code
+        pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, false);
+
+        // State: Clock is LOW
+        // This is after the 32nd clock has fallen
+
+        // set pindirs, 0          side 0
+        pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_set(pio_pindirs, 0) | pio_encode_sideset(1, 0));
+
+        // Patch SM instructions
+        uint16_t instr0 = cyw43_spi_r_program_instructions[0];
+        uint16_t instr1 = cyw43_spi_r_program_instructions[1] | bus_data->pio_offset;
+        bus_data->pio->instr_mem[bus_data->pio_offset] = instr0;
+        bus_data->pio->instr_mem[bus_data->pio_offset + 1] = instr1;
+
+        // Explicitly jump to the second instruction in the now-read SM
+        // 33rd clock high here after enabling the PIO unit
+        pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_jmp(bus_data->pio_offset + 1) | pio_encode_sideset(1, 0));
+
+        // Re-enable the PIO unit
+        pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
+
         dma_channel_wait_for_finish_blocking(bus_data->dma_in);
+
+        // Re-patch to write
+        uint16_t instr0w = cyw43_spi_w_program_instructions[0];
+        uint16_t instr1w = cyw43_spi_w_program_instructions[1] | bus_data->pio_offset;
+        bus_data->pio->instr_mem[bus_data->pio_offset] = instr0w;
+        bus_data->pio->instr_mem[bus_data->pio_offset + 1] = instr1w;
 
         __compiler_memory_barrier();
         memset(rx, 0, tx_length); // make sure we don't have garbage in what would have been returned data if using real SPI
@@ -285,7 +325,10 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
         assert(!(((uintptr_t)tx) & 3));
         assert(!(tx_length & 3));
         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, false);
-        pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_LP1_END - 1);
+
+        // TODO patch the LP1_END auto-wrap here, just go to beginning
+        pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_END - 1);
+        
         pio_sm_clear_fifos(bus_data->pio, bus_data->pio_sm);
         pio_sm_set_pindirs_with_mask(bus_data->pio, bus_data->pio_sm, 1u << DATA_OUT_PIN, 1u << DATA_OUT_PIN);
         pio_sm_restart(bus_data->pio, bus_data->pio_sm);
@@ -299,12 +342,12 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
 
         dma_channel_config out_config = dma_channel_get_default_config(bus_data->dma_out);
         channel_config_set_bswap(&out_config, true);
-        channel_config_set_dreq(&out_config, pio_get_dreq(bus_data->pio, 0, true));
+        channel_config_set_dreq(&out_config, pio_get_dreq(bus_data->pio, bus_data->pio_sm, true));
 
-        dma_channel_configure(bus_data->dma_out, &out_config, &bus_data->pio->txf[0], tx, tx_length / 4, true);
+        dma_channel_configure(bus_data->dma_out, &out_config, &bus_data->pio->txf[bus_data->pio_sm], tx, tx_length / 4, true);
 
         bus_data->pio->fdebug = 1u << PIO_FDEBUG_TXSTALL_LSB;
-        pio_sm_set_enabled(bus_data->pio, 0, true);
+        pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
         while (!(bus_data->pio->fdebug & (1u << PIO_FDEBUG_TXSTALL_LSB))) {
             tight_loop_contents(); // todo timeout
         }
@@ -543,3 +586,5 @@ int cyw43_write_bytes(cyw43_int_t *self, uint32_t fn, uint32_t addr, size_t len,
     }
 }
 #endif
+
+#pragma GCC pop_options

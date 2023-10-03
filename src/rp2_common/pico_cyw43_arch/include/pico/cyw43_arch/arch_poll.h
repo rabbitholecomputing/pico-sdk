@@ -31,8 +31,13 @@ void cyw43_thread_check(void);
 #define CYW43_SDPCM_SEND_COMMON_WAIT cyw43_poll_required = true;
 #define CYW43_DO_IOCTL_WAIT cyw43_poll_required = true;
 
-#define cyw43_delay_ms sleep_ms
-#define cyw43_delay_us sleep_us
+
+#ifndef cyw43_delay_ms
+//#define cyw43_delay_ms sleep_ms
+#endif
+#ifndef cyw43_delay_us
+//#define cyw43_delay_us sleep_us
+#endif
 
 void cyw43_schedule_internal_poll_dispatch(void (*func)(void));
 

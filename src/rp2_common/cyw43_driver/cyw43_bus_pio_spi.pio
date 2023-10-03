@@ -1,20 +1,26 @@
 ;
 ; Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+; Copyright (c) 2023 Tech by Androda, LLC
 ;
 ; SPDX-License-Identifier: BSD-3-Clause
 ;
 
-.program spi_gap0_sample1
+
+; Basic PIO program to write to CYW43
+.program cyw43_spi_w
 .side_set 1
 
 ; always transmit multiple of 32 bytes
-lp: out pins, 1             side 0
-    jmp x-- lp              side 1
-public lp1_end:
-    set pindirs, 0          side 0
-lp2:
-    in pins, 1              side 1
-    jmp y-- lp2             side 0
+    out pins, 1             side 0
+    nop                     side 1
+public end:
+
+; A program to overwrite 'cyw43_spi_w' when read is also necessary 
+.program cyw43_spi_r
+.side_set 1
+
+    in pins, 1              side 0
+    nop                     side 1
 public end:
 
 .program spi_gap01_sample0
@@ -25,37 +31,9 @@ lp: out pins, 1             side 0
     jmp x-- lp              side 1
 public lp1_end:
     set pindirs, 0          side 0
-    nop                     side 1
+    nop                     side 1  ;; 33rd clock
 lp2:
     in pins, 1              side 0
     jmp y-- lp2             side 1
-public end:
-
-.program spi_gap010_sample1
-.side_set 1
-
-; always transmit multiple of 32 bytes
-lp: out pins, 1             side 0
-    jmp x-- lp              side 1
-public lp1_end:
-    set pindirs, 0          side 0
-    nop                     side 1
-    nop                     side 0
-lp2:
-    in pins, 1              side 1
-    jmp y-- lp2             side 0
-public end:
-
-.program spi_gap0_sample1_regular
-.side_set 1
-
-; always transmit multiple of 32 bytes
-lp: out pins, 1             side 0
-    jmp x-- lp              side 1
-public lp1_end:
-    set pindirs, 0          side 0
-lp2:
-    in pins, 1              side 1
-    jmp y-- lp2             side 0
 public end:
 
