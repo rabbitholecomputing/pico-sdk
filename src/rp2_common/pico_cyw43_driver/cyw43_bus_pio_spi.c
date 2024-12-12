@@ -1,16 +1,22 @@
 /*
  * Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+ * Copyright (c) 2023 Tech by Androda, LLC
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
+
+#pragma GCC push_options
+#pragma GCC optimize ("-O0")
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
+#include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
+#include "hardware/structs/io_bank0.h"
 #include "hardware/sync.h"
 #include "hardware/dma.h"
 #include "cyw43_bus_pio_spi.pio.h"
@@ -34,12 +40,14 @@ static_assert((CYW43_PIN_WL_DATA_OUT < 32 && CYW43_PIN_WL_DATA_IN < 32 && CYW43_
 #define SPI_PROGRAM_NAME CYW43_SPI_PROGRAM_NAME
 #else
 //#define SPI_PROGRAM_NAME spi_gap0_sample1 // for lower cpu speed
-#define SPI_PROGRAM_NAME spi_gap01_sample0 // for high cpu speed
+//#define SPI_PROGRAM_NAME spi_gap01_sample0 // for high cpu speed
+#define SPI_PROGRAM_NAME cyw43_spi_w // custom smaller SPI pio program
+
 #endif
 #define SPI_PROGRAM_FUNC __CONCAT(SPI_PROGRAM_NAME, _program)
 #define SPI_PROGRAM_GET_DEFAULT_CONFIG_FUNC __CONCAT(SPI_PROGRAM_NAME, _program_get_default_config)
 #define SPI_OFFSET_END __CONCAT(SPI_PROGRAM_NAME, _offset_end)
-#define SPI_OFFSET_LP1_END __CONCAT(SPI_PROGRAM_NAME, _offset_lp1_end)
+// #define SPI_OFFSET_LP1_END __CONCAT(SPI_PROGRAM_NAME, _offset_lp1_end)
 
 #if !CYW43_PIO_CLOCK_DIV_DYNAMIC
 #define cyw43_pio_clock_div_int CYW43_PIO_CLOCK_DIV_INT
@@ -110,16 +118,25 @@ int cyw43_spi_init(cyw43_int_t *self) {
     assert(!self->bus_data);
     self->bus_data = &bus_data_instance;
     bus_data_t *bus_data = (bus_data_t *)self->bus_data;
-    bus_data->pio = NULL;
+    bus_data->pio = pio0; // required for ZuluSCSI DaynaPORT
     bus_data->dma_in = -1;
     bus_data->dma_out = -1;
 
     const uint min_gpio = MIN(CYW43_PIN_WL_CLOCK, MIN(CYW43_PIN_WL_DATA_IN, CYW43_PIN_WL_DATA_OUT));
     const uint max_gpio = MAX(CYW43_PIN_WL_CLOCK, MAX(CYW43_PIN_WL_DATA_IN, CYW43_PIN_WL_DATA_OUT));
-    if (!pio_claim_free_sm_and_add_program_for_gpio_range(&SPI_PROGRAM_FUNC, &bus_data->pio, &bus_data->pio_sm, &bus_data->pio_offset, min_gpio, max_gpio - min_gpio + 1, true)) {
+    if (!pio_can_add_program(bus_data->pio, &SPI_PROGRAM_FUNC)) {
         cyw43_spi_deinit(self);
         return CYW43_FAIL_FAST_CHECK(-CYW43_EIO);
     }
+    int claimed_sm = pio_claim_unused_sm(bus_data->pio, false);
+    if (claimed_sm < 0)
+    {
+        cyw43_spi_deinit(self);
+        return CYW43_FAIL_FAST_CHECK(-CYW43_EIO);
+    }
+    bus_data->pio_sm = (uint)claimed_sm;
+
+    bus_data->pio_offset = pio_add_program(bus_data->pio, &SPI_PROGRAM_FUNC);
     pio_sm_config config = SPI_PROGRAM_GET_DEFAULT_CONFIG_FUNC(bus_data->pio_offset);
 
     sm_config_set_clkdiv_int_frac8(&config, cyw43_pio_clock_div_int, cyw43_pio_clock_div_frac8);
@@ -143,6 +160,7 @@ int cyw43_spi_init(cyw43_int_t *self) {
     pio_sm_set_config(bus_data->pio, bus_data->pio_sm, &config);
     pio_sm_set_consecutive_pindirs(bus_data->pio, bus_data->pio_sm, CYW43_PIN_WL_CLOCK, 1, true);
     gpio_set_function(CYW43_PIN_WL_DATA_OUT, pio_get_funcsel(bus_data->pio));
+    gpio_set_function(CYW43_PIN_WL_CLOCK, pio_get_funcsel(bus_data->pio));
 
     // Set data pin to pull down and schmitt
     gpio_set_pulls(CYW43_PIN_WL_DATA_IN, false, true);
@@ -277,8 +295,39 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
         __compiler_memory_barrier();
 
+        // TODO Anything special required for the case where 0 bits are being read/written?
         dma_channel_wait_for_finish_blocking(bus_data->dma_out);
+
+        // Set PIO disabled so instructions can be rewritten
+        // Disabled only means it's not auto-running, has nothing to do with manual calls to execute code
+        pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, false);
+
+        // State: Clock is LOW
+        // This is after the 32nd clock has fallen
+
+        // set pindirs, 0          side 0
+        pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_set(pio_pindirs, 0) | pio_encode_sideset(1, 0));
+
+        // Patch SM instructions
+        uint16_t instr0 = cyw43_spi_r_program_instructions[0];
+        uint16_t instr1 = cyw43_spi_r_program_instructions[1] | bus_data->pio_offset;
+        bus_data->pio->instr_mem[bus_data->pio_offset] = instr0;
+        bus_data->pio->instr_mem[bus_data->pio_offset + 1] = instr1;
+
+        // Explicitly jump to the second instruction in the now-read SM
+        // 33rd clock high here after enabling the PIO unit
+        pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_jmp(bus_data->pio_offset + 1) | pio_encode_sideset(1, 0));
+
+        // Re-enable the PIO unit
+        pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
+
         dma_channel_wait_for_finish_blocking(bus_data->dma_in);
+
+        // Re-patch to write
+        uint16_t instr0w = cyw43_spi_w_program_instructions[0];
+        uint16_t instr1w = cyw43_spi_w_program_instructions[1] | bus_data->pio_offset;
+        bus_data->pio->instr_mem[bus_data->pio_offset] = instr0w;
+        bus_data->pio->instr_mem[bus_data->pio_offset + 1] = instr1w;
 
         __compiler_memory_barrier();
         memset(rx, 0, tx_length); // make sure we don't have garbage in what would have been returned data if using real SPI
@@ -290,7 +339,10 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
         assert(!(((uintptr_t)tx) & 3));
         assert(!(tx_length & 3));
         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, false);
-        pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_LP1_END - 1);
+        //pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_LP1_END - 1);
+        // TODO patch the LP1_END auto-wrap here, just go to beginning
+        pio_sm_set_wrap(bus_data->pio, bus_data->pio_sm, bus_data->pio_offset, bus_data->pio_offset + SPI_OFFSET_END - 1);
+
         pio_sm_clear_fifos(bus_data->pio, bus_data->pio_sm);
         pio_sm_set_pindirs_with_mask64(bus_data->pio, bus_data->pio_sm, 1ull << CYW43_PIN_WL_DATA_OUT, 1ull << CYW43_PIN_WL_DATA_OUT);
         pio_sm_restart(bus_data->pio, bus_data->pio_sm);
@@ -601,3 +653,4 @@ uint cyw43_get_pin_wl(cyw43_pin_index_t pin_id) {
     return cyw43_pin_array[pin_id];
 }
 #endif // CYW43_PIN_WL_DYNAMIC
+#pragma GCC pop_options

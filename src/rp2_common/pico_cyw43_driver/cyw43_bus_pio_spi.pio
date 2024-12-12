@@ -23,17 +23,4 @@ public end:
     nop                     side 1
 public end:
 
-.program spi_gap01_sample0
-.side_set 1
-
-; always transmit multiple of 32 bytes
-lp: out pins, 1             side 0
-    jmp x-- lp              side 1
-public lp1_end:
-    set pindirs, 0          side 0
-    nop                     side 1  ;; 33rd clock
-lp2:
-    in pins, 1              side 0
-    jmp y-- lp2             side 1
-public end:
 
