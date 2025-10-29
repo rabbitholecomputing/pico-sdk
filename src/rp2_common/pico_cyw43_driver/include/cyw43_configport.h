@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 #ifndef CYW43_USE_OTP_MAC
-#define CYW43_USE_OTP_MAC 1
+#define CYW43_USE_OTP_MAC 0
 #endif
 
 #ifndef CYW43_NO_NETUTILS
