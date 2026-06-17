@@ -37,13 +37,13 @@ if (PICO_CYW43_SUPPORTED) # set by BOARD=pico-w
                     CYW43_LWIP=1
                     )
 
-            pico_add_library(pico_cyw43_arch_threadsafe_background NOFLAG)
-            pico_mirrored_target_link_libraries(pico_cyw43_arch_threadsafe_background INTERFACE
-                    pico_cyw43_arch
-                    pico_async_context_threadsafe_background)
-            target_compile_definitions(pico_cyw43_arch_threadsafe_background_headers INTERFACE
-                    PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1
-                    )
+        #     pico_add_library(pico_cyw43_arch_threadsafe_background NOFLAG)
+        #     pico_mirrored_target_link_libraries(pico_cyw43_arch_threadsafe_background INTERFACE
+        #             pico_cyw43_arch
+        #             pico_async_context_threadsafe_background)
+        #     target_compile_definitions(pico_cyw43_arch_threadsafe_background_headers INTERFACE
+        #             PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1
+        #             )
 
             pico_add_library(pico_cyw43_arch_lwip_threadsafe_background NOFLAG)
             pico_mirrored_target_link_libraries(pico_cyw43_arch_lwip_threadsafe_background INTERFACE
@@ -73,14 +73,14 @@ if (PICO_CYW43_SUPPORTED) # set by BOARD=pico-w
                     )
         endif()
 
-        pico_add_library(pico_cyw43_arch_none NOFLAG)
-        pico_mirrored_target_link_libraries(pico_cyw43_arch_none INTERFACE
-                pico_cyw43_arch
-                pico_async_context_threadsafe_background)
-        target_compile_definitions(pico_cyw43_arch_none_headers INTERFACE
-                CYW43_LWIP=0
-                PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1 # none still uses threadsafe_background to make gpio use easy
-                )
+        # pico_add_library(pico_cyw43_arch_none NOFLAG)
+        # pico_mirrored_target_link_libraries(pico_cyw43_arch_none INTERFACE
+        #         pico_cyw43_arch
+        #         pico_async_context_threadsafe_background)
+        # target_compile_definitions(pico_cyw43_arch_none_headers INTERFACE
+        #         CYW43_LWIP=0
+        #         PICO_CYW43_ARCH_THREADSAFE_BACKGROUND=1 # none still uses threadsafe_background to make gpio use easy
+        #         )
     endif()
 endif()
 
